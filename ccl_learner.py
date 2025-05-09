@@ -46,19 +46,38 @@ class TwoPassCCL:
         self.next_label = 1
         print("CCL state reset.")
     
-    # def find_representative(self, label):
-    #     """
-    #     Find the root representative for a given label using path compression.
-    #     """
-    #     if label not in self.equivalences:
-    #         return label
+    def find_representative(self, label):
+        """
+        Find the root representative for a given label using path compression.
+        """
+        if label not in self.equivalences:
+            return label
         
-    #     #path to find the root
-    #     path = [label]
-    #     root = self.equivalences[label]
-    #     while root != self.equivalences[root]:
-    #         path.append(root)
-    #         root = self.equivalences[root] 
+        #path to find the root
+        path = [label]
+        root = self.equivalences[label]
+        while root != self.equivalences[root]:
+            path.append(root)
+            root = self.equivalences[root] 
+        # path compression" make all node in the path point to the root
+        for l_in_path in path:
+            self.equivalences[l_in_path] = root
+            return root
+    def union(self, label1, label2):
+        """
+        Merges the sets containing label1 and label2.
+        The Representative of the merged set will be the minimum of their current representatives.
+        """
+        
+        rep1 = self.find_representative(label1)
+        rep2 = self.find_representative(label2)
+        
+        if rep1 != rep2:
+            # make smaller representative parent the larger one
+            if rep1 < rep2:
+                self.equivalences[rep2] = rep1
+            else:
+                self.equivalences[rep1] = rep2
     def first_pass(self, image):
         """
         Performs the first pass of the CCL alorithm.
@@ -74,10 +93,88 @@ class TwoPassCCL:
                     neighbors_labels = []
                     
                     # for 4 connectivity
-                    # top (r-1, c) this is the 4 connectivith
+                    # Neighbor 1: top (r-1, c) this is the 4 connectivith
                     if r > 0 and self.labels[r-1, c] > 0:
                         neighbors_labels.append(self.labels[r-1, c])
                     
-                    # left (r, c-1) this is the 4 connectivith
+                    # Neighbor 2: left (r, c-1) this is the 4 connectivith
                     if c > 0 and self.labels[r, c-1] > 0:
                         neighbors_labels.append(self.labels[r, c-1])
+                    
+                    # for 8 connectivity
+                    if self.connectivity == 8:
+                        # Neighbor 3: top-left (r-1, c-1)
+                        if r > 0 and c > 0 and self.labels[r-1, c-1] > 0:
+                            neighbors_labels.append(self.labels[r-1, c-1])
+                        
+                        # Neighbor 4: top-right (r-1, c+1)
+                        if r > 0 and c < cols - 1 and self.labels[r-1, c+1] > 0:
+                            neighbors_labels.append(self.labels[r-1, c+1]) 
+                    if not neighbors_labels:
+                        # case 1: no foreground neighbors
+                        self.labels[r, c] = self.next_label
+                        self.equivalences[self.next_label] = self.next_label #point to itself
+                        self.next_label += 1
+                    else:
+                        # case 2, 3 ,4
+                        min_neighbor_label = min(neighbors_labels)
+                        self.labels[r, c] = min_neighbor_label
+                        
+                        for l in neighbors_labels:
+                            if l != min_neighbor_label:
+                                self.union(min_neighbor_label, l)
+    def second_pass(self, image):
+        """
+        Performs the second pass. Replaces provisional labels with their
+        final representative labels.
+        """
+        rows, cols = image.shape
+        final_labels = np.zeros_like(self.labels)
+
+        for r in range(rows):
+            for c in range(cols):
+                if self.labels[r, c] > 0: # If it was a foreground pixel
+                    final_labels[r, c] = self.find_representative(self.labels[r, c])
+        
+        self.labels = final_labels
+        # This makes visualization nicer and is common practice.
+        unique_final_labels = np.unique(self.labels)
+        # print("Unique final labels:", unique_final_labels)
+        
+        current_new_label = 1
+        label_map = {} # old_label -> new_consecutive_label
+        
+        for old_label in unique_final_labels:
+            if old_label == 0: # Skip background
+                label_map[0] = 0
+                continue
+            label_map[old_label] = current_new_label
+            current_new_label += 1
+
+        consecutive_labels_image = np.zeros_like(self.labels)
+        for r in range(rows):
+            for c in range(cols):
+                consecutive_labels_image[r,c] = label_map[self.labels[r,c]]
+        
+        self.labels = consecutive_labels_image
+
+    def label_components(self, image):
+        """
+        Main function to perform CCL on the binary image.
+        Image should be a 2D Numpy array with 0 for background, 1 for foreground.
+        Return the labeled image.
+        """
+        self._reset() # reset state for new image
+        if image.ndim != 2:
+            raise ValueError("Input image must be 2D.")
+        if not ((image == 0) | (image == 1)).all():
+            raise ValueError("Input image must be binary (0s and 1s.)")
+        
+        self.first_pass(image)
+        if not self.equivalences: # no foreground pixels found
+            self.labels = np.zeros_like(image, dtype=int)
+            return self.labels
+        
+        self.second_pass(image)
+        
+        return self.labels
